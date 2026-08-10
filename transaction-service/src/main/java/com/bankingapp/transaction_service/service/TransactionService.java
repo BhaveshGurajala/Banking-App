@@ -5,6 +5,8 @@ import com.bankingapp.transaction_service.dto.AmountRequest;
 import com.bankingapp.transaction_service.dto.BalanceUpdateRequest;
 import com.bankingapp.transaction_service.dto.TransferRequest;
 import com.bankingapp.transaction_service.entity.Transaction;
+import com.bankingapp.transaction_service.event.TransactionCompletedEvent;
+import com.bankingapp.transaction_service.event.TransactionEventPublisher;
 import com.bankingapp.transaction_service.repository.TransactionRepository;
 import feign.FeignException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -21,6 +23,7 @@ public class TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final AccountClient accountClient;
+    private final TransactionEventPublisher eventPublisher;
 
     @CircuitBreaker(name="accountService", fallbackMethod = "depositFallback")
     public Transaction deposit(AmountRequest request) {
@@ -32,7 +35,17 @@ public class TransactionService {
                 .amount(request.getAmount())
                 .status("SUCCESS")
                 .build();
-        return transactionRepository.save(txn);
+        Transaction saved = transactionRepository.save(txn);
+
+        eventPublisher.publish(TransactionCompletedEvent.builder()
+                .transactionType("DEPOSIT")
+                .accountNumber(request.getAccountNumber())
+                .amount(request.getAmount())
+                .status("SUCCESS")
+                .timestamp(saved.getTimestamp())
+                .build());
+
+        return saved;
     }
 
     @CircuitBreaker(name="accountService", fallbackMethod = "withdrawFallback")
@@ -45,7 +58,17 @@ public class TransactionService {
                 .amount(request.getAmount())
                 .status("SUCCESS")
                 .build();
-        return transactionRepository.save(txn);
+        Transaction saved = transactionRepository.save(txn);
+
+        eventPublisher.publish(TransactionCompletedEvent.builder()
+                .transactionType("WITHDRAWAL")
+                .accountNumber(request.getAccountNumber())
+                .amount(request.getAmount())
+                .status("SUCCESS")
+                .timestamp(saved.getTimestamp())
+                .build());
+
+        return saved;
     }
 
     @CircuitBreaker(name="accountService", fallbackMethod = "transferFallback")
@@ -69,7 +92,25 @@ public class TransactionService {
                 .status("SUCCESS")
                 .build();
 
-        return transactionRepository.save(txn);
+        Transaction saved = transactionRepository.save(txn);
+
+        eventPublisher.publish(TransactionCompletedEvent.builder()
+                .transactionType("TRANSFER_OUT")
+                .accountNumber(request.getFromAccountNumber())
+                .amount(request.getAmount())
+                .status("SUCCESS")
+                .timestamp(saved.getTimestamp())
+                .build());
+
+        eventPublisher.publish(TransactionCompletedEvent.builder()
+                .transactionType("TRANSFER_IN")
+                .accountNumber(request.getToAccountNumber())
+                .amount(request.getAmount())
+                .status("SUCCESS")
+                .timestamp(saved.getTimestamp())
+                .build());
+
+        return saved;
     }
 
     private Transaction depositFallback(AmountRequest request, Throwable t) {
