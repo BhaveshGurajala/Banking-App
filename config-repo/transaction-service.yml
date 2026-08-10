@@ -51,3 +51,6 @@ management:
   health:
     circuitbreakers:
       enabled: true
+
+jwt:
+  secret: ThisIsADevOnlySecretKeyChangeMeInProdMinimum256BitsLong123
