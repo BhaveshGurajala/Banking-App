@@ -27,11 +27,12 @@ Built as a hands-on learning project — every line was written and understood s
 
 ## Overview
 
-Instead of one monolithic Spring Boot app, this system is split into five independently deployable services, each owning its own database:
+Instead of one monolithic Spring Boot app, this system is split into six independently deployable services, each owning its own database (where it has one):
 
 | Service | Responsibility | Port | Own Database |
 |---|---|---|---|
 | **discovery-server** | Service registry (Eureka) — every service registers here so others can find it by name instead of a hardcoded IP | 8761 | — |
+| **config-server** | Centralized configuration — every service's `application.yml` (ports, DB credentials, JWT secret, Resilience4j thresholds) lives in one place and is fetched over HTTP at startup, instead of being duplicated across each service's own files | 8888 | — |
 | **api-gateway** | Single entry point for all client traffic. Validates JWTs, routes requests to the right service | 8080 | — |
 | **auth-service** | User registration/login, password hashing, JWT issuing | 8081 | `bankapp_auth` |
 | **account-service** | Account creation, balance, debit/credit, optimistic locking | 8082 | `bankapp_account` |
@@ -51,8 +52,9 @@ graph TB
         GW["API Gateway :8080<br/>JWT Validation + Routing"]
     end
 
-    subgraph Registry
+    subgraph Registry_and_Config
         Eureka["Discovery Server :8761<br/>(Eureka)"]
+        Config["Config Server :8888<br/>reads config-repo/ from GitHub"]
     end
 
     subgraph Services
@@ -77,6 +79,11 @@ graph TB
     Txn -.->|register| Eureka
     GW -.->|discover services| Eureka
 
+    Auth -.->|"fetch config on startup"| Config
+    Acct -.->|"fetch config on startup"| Config
+    Txn -.->|"fetch config on startup"| Config
+    GW -.->|"fetch config on startup"| Config
+
     Txn -->|"Feign + @CircuitBreaker"| Acct
 
     Auth --> AuthDB
@@ -84,7 +91,7 @@ graph TB
     Txn --> TxnDB
 ```
 
-**Solid arrows** = real request traffic. **Dashed arrows** = Eureka service discovery (registration and lookup, not business data).
+**Solid arrows** = real request traffic. **Dashed arrows** = Eureka service discovery / Config Server lookups (registration, config fetch, and name resolution — not business data).
 
 ---
 
@@ -93,19 +100,22 @@ graph TB
 ### 1. Discovery Server (Eureka)
 Every other service registers itself here on startup (`spring.application.name`, e.g. `account-service`, becomes `ACCOUNT-SERVICE` in the registry). The gateway and Feign clients look services up **by name**, never by hardcoded host:port — so a service can move, restart, or scale to multiple instances without anything else needing to change.
 
-### 2. API Gateway
+### 2. Config Server
+Centralizes configuration that would otherwise be duplicated and error-prone to keep in sync — most importantly the `jwt.secret`, which **must** be identical between auth-service (which signs tokens) and api-gateway (which verifies them). Each service's full config lives as one YAML file (e.g. `auth-service.yml`) inside a `config-repo/` folder in this same GitHub repo. Config Server clones that repo (`spring.cloud.config.server.git.uri`, `search-paths: config-repo`) and serves each file over HTTP at `GET /{service-name}/default`. Every other service keeps only a minimal local `application.yml` — just its `spring.application.name` and `spring.config.import: optional:configserver:http://localhost:8888` — and fetches everything else from here at startup. The `optional:` prefix means a service still starts on its bare-minimum local config if Config Server happens to be unreachable, rather than failing outright.
+
+### 3. API Gateway
 The only service clients talk to directly. Built on Spring Cloud Gateway. A `JwtAuthenticationFilter` (a `GlobalFilter`) runs on every request:
 - Requests to `/api/auth/register` and `/api/auth/login` pass through untouched (you can't require a token to get your first token).
 - Every other request must carry `Authorization: Bearer <token>`. The filter validates the signature and expiry; on success it forwards the username downstream via an `X-User` header, so account-service and transaction-service know who's calling without re-parsing the JWT themselves.
 - Routes requests to the right service by path prefix (`/api/auth/**`, `/api/accounts/**`, `/api/transactions/**`), resolving the target via Eureka (`lb://ACCOUNT-SERVICE`, not a fixed URL).
 
-### 3. Auth Service
+### 4. Auth Service
 Handles `POST /api/auth/register` and `POST /api/auth/login`. Passwords are hashed with **BCrypt** before ever touching the database — the raw password is never stored. On success, issues a JWT signed with HMAC-SHA, containing the username (`sub`) and role as claims. Duplicate username/email checks return `409 Conflict`; failed login returns a **generic** `401` for both "user doesn't exist" and "wrong password," so the API can't be used to enumerate valid usernames.
 
-### 4. Account Service
+### 5. Account Service
 Owns account data — `POST /api/accounts` (create), `GET /api/accounts/{accountNumber}`, and internal `PUT /{accountNumber}/debit` / `/credit` endpoints (called by transaction-service, not customers directly). Balances use `BigDecimal`, never `double`/`float` — floating-point types can't exactly represent decimal fractions, and for money that's unacceptable. Every `Account` has a `@Version` field enabling **optimistic locking**: if two requests try to update the same account concurrently, the second one's stale-version update is rejected rather than silently overwriting the first (preventing a classic "lost update" bug).
 
-### 5. Transaction Service
+### 6. Transaction Service
 The most involved service. `POST /api/transactions/deposit|withdraw|transfer` each call account-service through a **Feign client**, wrapped in a **Resilience4j `@CircuitBreaker`**. Every attempt — successful or failed — is recorded as an immutable `Transaction` row (an audit log, never updated in place, only ever inserted). See the sections below for exactly how this works.
 
 ---
@@ -246,6 +256,7 @@ Configuration (`transaction-service/application.yml`):
 - **Spring Security** (auth-service only) — BCrypt password hashing
 - **jjwt 0.12.6** — JWT signing/parsing
 - **Spring Cloud Netflix Eureka** — service discovery
+- **Spring Cloud Config Server** (git-backed) — centralized configuration, reading `config-repo/` from this repo on GitHub
 - **Spring Cloud Gateway** — API gateway, reactive filter-based routing
 - **Spring Cloud OpenFeign** — declarative HTTP client for service-to-service calls
 - **Resilience4j** (via `spring-cloud-starter-circuitbreaker-resilience4j`) — circuit breaker
@@ -259,22 +270,24 @@ Configuration (`transaction-service/application.yml`):
 
 - Java 21
 - Maven (or use the included `mvnw` wrapper)
-- MySQL 8 running locally on `3306` (default credentials `root`/`root` — override via `application.yml` if different)
+- MySQL 8 running locally on `3306` (default credentials `root`/`root` — sourced from `config-repo/*.yml`, override there if different)
+- Internet access on first config-server startup, to clone this repo's `config-repo/` folder from GitHub
 - IntelliJ IDEA (or any IDE) — each service is a separate Maven module
 
 ## Running the Project
 
-Databases are auto-created on first connection (`createDatabaseIfNotExist=true`) — no manual `CREATE DATABASE` needed.
+Databases are auto-created on first connection (`createDatabaseIfNotExist=true`) — no manual `CREATE DATABASE` needed. Configuration for every service (ports, DB credentials, JWT secret, Resilience4j thresholds, gateway routes) lives in [`config-repo/`](./config-repo) in this same repo, served by `config-server` at runtime — see [Config Server](#2-config-server) above.
 
-**Start order matters** — each service registers with Eureka on boot, and the gateway needs the others discoverable:
+**Start order matters** — `config-server` and `discovery-server` must be up before anything that depends on them:
 
 1. `discovery-server` — wait until `http://localhost:8761` loads
-2. `auth-service`
-3. `account-service`
-4. `transaction-service`
-5. `api-gateway`
+2. `config-server` — verify it's serving config, e.g. `http://localhost:8888/auth-service/default` should return JSON
+3. `auth-service`
+4. `account-service`
+5. `transaction-service`
+6. `api-gateway`
 
-Verify all four application services show up under "Instances currently registered with Eureka" at `http://localhost:8761`.
+Verify all five application services (auth, account, transaction, gateway, and config-server itself) show up under "Instances currently registered with Eureka" at `http://localhost:8761`.
 
 ## API Reference
 
@@ -301,6 +314,19 @@ curl -X POST http://localhost:8080/api/accounts \
   -H "Authorization: Bearer <token from above>" -H "Content-Type: application/json" \
   -d '{"ownerUsername":"bhavesh","accountType":"SAVINGS","initialDeposit":1000}'
 ```
+
+### Postman Collection
+
+A ready-to-import Postman collection and environment live in [`postman/`](./postman) — every endpoint in the API Reference table above, pre-built:
+
+- `postman/Banking-App.postman_collection.json`
+- `postman/Banking-App.postman_environment.json`
+
+**To use:**
+1. Import both files into Postman
+2. Select the **Banking App** environment (top-right dropdown)
+3. Run **Login User** once — its post-response script (`pm.environment.set("token", response.token)`) automatically saves the returned JWT into the environment's `token` variable
+4. Every other protected request is already configured with **Authorization → Bearer Token → `{{token}}`**, so it authenticates automatically — no manual copy-pasting of tokens between requests. Just re-run Login when the token expires (1 hour, per `jwt.expiration-ms`).
 
 ## Database Design
 
