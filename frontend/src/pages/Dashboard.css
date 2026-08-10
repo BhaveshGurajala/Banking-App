@@ -1,0 +1,39 @@
+.dashboard {
+  max-width: 700px;
+  margin: 0 auto 3rem;
+  padding: 0 1rem;
+}
+
+.dashboard-greeting {
+  margin-bottom: 1.5rem;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 1.5rem;
+}
+
+.account-card {
+  padding: 1.25rem;
+}
+
+.account-meta {
+  margin-bottom: 4px;
+}
+
+.action-bar {
+  display: flex;
+  gap: 10px;
+}
+
+.action-link {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+}
