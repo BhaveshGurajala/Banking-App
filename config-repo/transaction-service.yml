@@ -54,3 +54,6 @@ management:
 
 jwt:
   secret: ThisIsADevOnlySecretKeyChangeMeInProdMinimum256BitsLong123
+
+internal:
+  api-key: a7f3d9e1-banking-internal-key-92c8b4
