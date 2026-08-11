@@ -1,8 +1,8 @@
-# Banking Application — Spring Boot Microservices
+# Banking Application — Spring Boot Microservices + React Frontend
 
-A banking system built from scratch as independent Spring Boot microservices, with JWT-based authentication at the gateway layer and a Resilience4j circuit breaker protecting inter-service calls.
+A full-stack banking system: seven independent Spring Boot microservices on the backend, with JWT-based authentication at the gateway layer and a Resilience4j circuit breaker protecting inter-service calls, plus a React (Vite) single-page frontend that drives the whole thing through the gateway.
 
-Built as a hands-on learning project — every line was written and understood service by service, not generated wholesale. See [What I Learned](#what-i-learned) for the concepts this project actually covers.
+Built as a hands-on learning project — every line was written and understood service by service, page by page, not generated wholesale. See [What I Learned](#what-i-learned) for the concepts this project actually covers.
 
 ---
 
@@ -11,6 +11,7 @@ Built as a hands-on learning project — every line was written and understood s
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Services](#services)
+- [Frontend](#frontend)
 - [Request Flow: JWT Authentication](#request-flow-jwt-authentication)
 - [Request Flow: Money Transfer with Circuit Breaker](#request-flow-money-transfer-with-circuit-breaker)
 - [Event-Driven Flow: Kafka Notifications](#event-driven-flow-kafka-notifications)
@@ -40,6 +41,7 @@ Instead of one monolithic Spring Boot app, this system is split into seven indep
 | **account-service** | Account creation, balance, debit/credit, optimistic locking | 8082 | `bankapp_account` |
 | **transaction-service** | Deposits, withdrawals, transfers — calls account-service via Feign, protected by a circuit breaker, publishes events to Kafka | 8083 | `bankapp_transaction` |
 | **notification-service** | Consumes transaction events from Kafka asynchronously and logs a notification message — decoupled entirely from the request/response cycle | 8084 | — |
+| **frontend** | React + Vite single-page app — the client that actually uses all of the above through the gateway | 5173 | — |
 
 **Why split it up at all?** In a monolith, a bug in "transactions" code can crash the whole application — including login. Here, if transaction-service goes down, people can still log in and check balances. Each service scales, fails, and deploys independently. That independence is also *why* microservices need things a monolith never worries about: service discovery, an API gateway, and resilience patterns like circuit breakers — because now services talk to each other over an unreliable network instead of a simple in-process method call.
 
@@ -49,7 +51,7 @@ Instead of one monolithic Spring Boot app, this system is split into seven indep
 
 ```mermaid
 graph TB
-    Client["Client (Postman / Browser / Mobile App)"]
+    Client["React Frontend :5173<br/>(Vite) — or Postman / mobile"]
 
     subgraph Gateway Layer
         GW["API Gateway :8080<br/>JWT Validation + Routing"]
@@ -128,12 +130,33 @@ Handles `POST /api/auth/register` and `POST /api/auth/login`. Passwords are hash
 Owns account data — `POST /api/accounts` (create), `GET /api/accounts/{accountNumber}`, and internal `PUT /{accountNumber}/debit` / `/credit` endpoints (called by transaction-service, not customers directly). Balances use `BigDecimal`, never `double`/`float` — floating-point types can't exactly represent decimal fractions, and for money that's unacceptable. Every `Account` has a `@Version` field enabling **optimistic locking**: if two requests try to update the same account concurrently, the second one's stale-version update is rejected rather than silently overwriting the first (preventing a classic "lost update" bug).
 
 ### 6. Transaction Service
-The most involved service. `POST /api/transactions/deposit|withdraw|transfer` each call account-service through a **Feign client**, wrapped in a **Resilience4j `@CircuitBreaker`**. Every attempt — successful or failed — is recorded as an immutable `Transaction` row (an audit log, never updated in place, only ever inserted). See the sections below for exactly how this works. After a successful transaction, it also **publishes an event to Kafka** (topic `transaction-events`) via a `KafkaTemplate` — asynchronously, fire-and-forget, so a slow or unavailable Kafka broker never delays or fails the actual money movement.
+The most involved service. `POST /api/transactions/deposit|withdraw|transfer` each call account-service through a **Feign client**, wrapped in a **Resilience4j `@CircuitBreaker`**. Every attempt — successful or failed — is recorded as an immutable `Transaction` row (an audit log, never updated in place, only ever inserted). See the sections below for exactly how this works. After a successful transaction, it also **publishes an event to Kafka** (topic `transaction-events`) via a `KafkaTemplate` — asynchronously, fire-and-forget, so a slow or unavailable Kafka broker never delays or fails the actual money movement. `GET /api/transactions/account/{accountNumber}` returns transaction history for an account, sorted newest-first.
 
 ### 7. Notification Service
 A pure Kafka consumer — no REST endpoints, no database. `@KafkaListener(topics = "transaction-events", groupId = "notification-group")` subscribes to the topic and, for every event, logs a human-readable message (e.g. *"Your account was credited with ₹500"*), standing in for what would be a real email/SMS send. It runs entirely decoupled from transaction-service — if notification-service is down for an hour, deposits/withdrawals/transfers keep working normally, and it simply catches up on the backlog once it's back, reading from wherever its consumer group's offset last stopped.
 
 ---
+
+## Frontend
+
+A React single-page app (`frontend/`, built with **Vite**) that consumes the whole backend exclusively through **api-gateway** — the same JWT flow described below, now driven from a browser instead of Postman. It's the actual client for everything the backend section above describes: registering and logging in issues and stores a real JWT, every account and transaction screen reflects live data pulled through the gateway, and every deposit/withdrawal/transfer shown in the UI is a real call through Feign, the circuit breaker, and Kafka on the backend — nothing here is mocked.
+
+The app is a dark-themed, card-based UI: a shared `Navbar` across every authenticated page, a Dashboard listing account balances with quick actions, dedicated forms for each money-movement operation with success confirmations, and a merged transaction history view. Loading states use skeleton placeholders rather than spinners, and route access is guarded symmetrically — logged-out users can't reach account pages, and logged-in users can't linger on the login/register screens (including via the browser back button).
+
+**Pages:** Login, Register, Dashboard (account list + balances), Create Account, Deposit, Withdraw, Transfer, Transaction History.
+
+**Key pieces:**
+- **`api/axiosInstance.js`** — a single Axios instance with a request interceptor that automatically attaches `Authorization: Bearer <token>` to every outgoing call, reading the token from `localStorage`. Mirrors the same "attach a credential centrally, once" pattern used by transaction-service's Feign `RequestInterceptor` on the backend.
+- **`context/AuthContext.jsx`** — React Context holding the current login state (`token`, `username`, `isAuthenticated`) plus `login()`/`logout()`, so any component in the tree can read or change auth state without prop-drilling it down manually.
+- **`components/ProtectedRoute.jsx`** / **`components/PublicRoute.jsx`** — a matched pair of route guards. `ProtectedRoute` redirects to `/login` if there's no valid token; `PublicRoute` does the mirror image, redirecting an already-authenticated user *away* from Login/Register (e.g. via the browser back button) straight to `/dashboard`.
+- **`components/Layout.jsx`** — a layout route (nested under `ProtectedRoute`) rendering a shared `Navbar` plus React Router's `<Outlet />`, so every authenticated page automatically gets the nav bar and the auth check without repeating either per-page.
+- **CORS** — since the frontend (`localhost:5173`) and gateway (`localhost:8080`) are different origins, api-gateway explicitly allows `http://localhost:5173` via `spring.cloud.gateway.server.webflux.globalcors`, without which the browser would silently block every response.
+
+**Not built:** refresh-token handling on 401 (an expired token currently just fails the next request rather than transparently re-authenticating), and the transaction-history endpoint has no ownership check yet (any valid JWT can query any account's history by number) — same category of gap noted in [Defense-in-Depth Security](#defense-in-depth-security) for account-service's internal endpoints.
+
+---
+
+
 
 ## Request Flow: JWT Authentication
 
@@ -309,6 +332,9 @@ Configuration (`transaction-service/application.yml`):
 - **Spring Boot Actuator** — health/circuit-breaker state inspection
 - **Lombok** — boilerplate reduction (`@Data`, `@Builder`, `@RequiredArgsConstructor`)
 - **MySQL 8**
+- **React 18** + **Vite** — frontend, plain JavaScript (no TypeScript)
+- **React Router** — client-side routing, protected/public route guards
+- **Axios** — HTTP client, with a request interceptor for JWT attachment
 
 ---
 
@@ -316,10 +342,11 @@ Configuration (`transaction-service/application.yml`):
 
 - Java 21
 - Maven (or use the included `mvnw` wrapper)
+- Node.js (LTS) + npm — for the frontend
 - MySQL 8 running locally on `3306` (default credentials `root`/`root` — sourced from `config-repo/*.yml`, override there if different)
 - Docker Desktop — for running Kafka + Zookeeper via the included `docker-compose.yml`
 - Internet access on first config-server startup, to clone this repo's `config-repo/` folder from GitHub
-- IntelliJ IDEA (or any IDE) — each service is a separate Maven module
+- IntelliJ IDEA / VS Code (or any IDE) — each backend service is a separate Maven module; `frontend/` is a standalone npm project
 
 ## Running the Project
 
@@ -342,6 +369,14 @@ docker ps   # confirm both "kafka" and "zookeeper" containers show Up
 7. `api-gateway`
 
 Verify all six application services (auth, account, transaction, notification, gateway, and config-server itself) show up under "Instances currently registered with Eureka" at `http://localhost:8761`.
+
+**Then start the frontend:**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open `http://localhost:5173/register` to create a user and try the app end-to-end.
 
 ## API Reference
 
@@ -438,3 +473,5 @@ This project was built to understand — not just produce — the following:
 - **No distributed tracing** — would help once debugging cross-service call chains gets harder, especially now that a request can fan out into an async Kafka event on top of the synchronous call chain
 - **Kafka has one partition** — `transaction-events` was allowed to auto-create with the broker's default partition count rather than an explicitly configured value; fine at this scale, but worth setting explicitly to actually demonstrate parallel consumption
 - **No Docker Compose for the Spring services themselves** — Kafka + Zookeeper run via `docker-compose.yml`, but the 7 Spring Boot services + MySQL still require manually starting each one in order
+- **Frontend has no refresh-token flow** — when the JWT expires (1 hour), the next request just fails; the user has to manually log out/in again rather than being transparently re-authenticated or redirected on a 401
+- **No ownership check on transaction history** — `GET /api/transactions/account/{accountNumber}` will return any account's history to any valid JWT holder, not just the account's actual owner
