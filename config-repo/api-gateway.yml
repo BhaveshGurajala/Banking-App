@@ -26,12 +26,10 @@ spring:
               uri: lb://AUTH-SERVICE
               predicates:
                 - Path=/api/auth/**
-
             - id: account-service
               uri: lb://ACCOUNT-SERVICE
               predicates:
                 - Path=/api/accounts/**
-
             - id: transaction-service
               uri: lb://TRANSACTION-SERVICE
               predicates:
@@ -43,6 +41,6 @@ jwt:
 eureka:
   client:
     service-url:
-      defaultZone: http://localhost:8761/eureka/
+      defaultZone: http://${EUREKA_HOST:localhost}:8761/eureka/
   instance:
     prefer-ip-address: true
