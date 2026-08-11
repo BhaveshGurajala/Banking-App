@@ -1,0 +1,43 @@
+.history-page {
+  max-width: 600px;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+
+.history-list {
+  padding: 0.5rem 1.5rem;
+}
+
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-row:last-child {
+  border-bottom: none;
+}
+
+.history-label {
+  margin: 0;
+  font-size: 14px;
+}
+
+.history-date {
+  margin: 2px 0 0;
+}
+
+.history-amount {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.amount-positive {
+  color: var(--success);
+}
+
+.amount-negative {
+  color: var(--danger);
+}

@@ -1,0 +1,24 @@
+.form-page {
+  max-width: 420px;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+
+.form-back {
+  display: inline-block;
+  margin-bottom: 1rem;
+  font-size: 13px;
+}
+
+.form-header {
+  margin-bottom: 1.5rem;
+}
+
+.form-subtitle {
+  margin-top: 4px;
+}
+
+.form-hint {
+  margin-top: 0.75rem;
+  text-align: center;
+}

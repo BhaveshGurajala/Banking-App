@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import axiosInstance from '../api/axiosInstance.js';
 import { useAuth } from '../context/useAuth.js';
 import './Dashboard.css';
+import SkeletonList from '../components/SkeletonList.jsx';
+
 
 function Dashboard() {
   const [accounts, setAccounts] = useState([]);
@@ -28,9 +30,11 @@ function Dashboard() {
 
   return (
     <div className="dashboard">
-      <h1 className="dashboard-greeting">Your accounts</h1>
-
-      {loading && <p className="text-muted">Loading accounts...</p>}
+      <div className="section-header">
+        <h1 className="dashboard-greeting">Your accounts</h1>
+        <Link to="/history" className="link">Transaction history &rarr;</Link>
+      </div>
+      {loading && <SkeletonList rows={2} />}
       {error && <p className="error-text">{error}</p>}
 
       {!loading && !error && (

@@ -9,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/transactions")
 @RequiredArgsConstructor
@@ -29,5 +31,10 @@ public class TransactionController {
     @PostMapping("/transfer")
     public ResponseEntity<Transaction> transfer(@Valid @RequestBody TransferRequest request) {
         return ResponseEntity.ok(transactionService.transfer(request));
+    }
+
+    @GetMapping("/account/{accountNumber}")
+    public ResponseEntity<List<Transaction>> getHistory(@PathVariable String accountNumber) {
+        return ResponseEntity.ok(transactionService.getTransactionHistory(accountNumber));
     }
 }

@@ -16,6 +16,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Comparator;
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -111,6 +114,13 @@ public class TransactionService {
                 .build());
 
         return saved;
+    }
+
+    public List<Transaction> getTransactionHistory(String accountNumber) {
+        return transactionRepository.findByFromAccountNumberOrToAccountNumber(accountNumber, accountNumber)
+                .stream()
+                .sorted(Comparator.comparing(Transaction::getTimestamp).reversed())
+                .toList();
     }
 
     private Transaction depositFallback(AmountRequest request, Throwable t) {
